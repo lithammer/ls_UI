@@ -109,6 +109,110 @@ local function PostUpdateComboBar(self, cp)
 	end
 end
 
+local function CF_CreatePowerBar(self, texture, position)
+	local POWER_LAYOUT = {
+		["LEFT"] = {"RIGHT", 70, 140, 0.5, 0, -1, 1, 0},
+		["TOP"] = {"BOTTOM", 140, 70, 0, -0.5, -1, 1, 270},
+		["RIGHT"] = {"LEFT", 70, 140, -0.5, 0, 1, -1, 180},
+		["BOTTOM"] = {"TOP", 140, 70, 0, 0.5, 1, -1, 90},
+	}
+	local anchorPoint, width, height, w_multiplier, h_multiplier, CW, ACW, initAngle = unpack(POWER_LAYOUT[position])
+
+	local scrollFrame = CreateFrame("ScrollFrame", nil, self)
+	scrollFrame:SetSize(width, height)
+	scrollFrame:SetPoint(anchorPoint, self, "CENTER", 0, 0)
+
+	local scrollChild = CreateFrame("Frame")
+	scrollChild:SetSize(width, height)
+
+	scrollFrame:SetScrollChild(scrollChild)
+
+	local scrollTexture = scrollChild:CreateTexture("$parentActualPowerBar", "BACKGROUND", nil, -6)
+	scrollTexture:SetTexture(texture)
+	scrollTexture:SetSize(sqrt(2) * math.max(width, height), sqrt(2) * math.max(width, height))
+	scrollTexture:SetPoint("CENTER", width * w_multiplier, height * h_multiplier)
+
+	self.ag = scrollTexture:CreateAnimationGroup()
+	self.ag:SetIgnoreFramerateThrottle(true)
+
+	local AG = self.ag
+
+	AG.anim = AG:CreateAnimation("Rotation")
+	-- AG.anim:SetSmoothing("OUT")
+
+	AG.oldCur, AG.oldMax, AG.initAngle, AG.initUpdate, AG.CW, AG.ACW = 0, 0, initAngle, true, CW, ACW
+
+	scrollTexture:SetRotation(math.rad(AG.initAngle))
+	scrollTexture.degrees = AG.nit_angle
+
+	AG:SetScript("OnFinished", function (self, ...)
+		local scrollTexture = self:GetParent()
+		self.oldCur = self.newCur
+		scrollTexture:SetRotation(math.rad(scrollTexture.degrees))
+	end)
+
+	AG:SetScript("OnStop", function (self, ...)
+		local scrollTexture = self:GetParent()
+		scrollTexture:SetRotation(math.rad(scrollTexture.degrees))
+	end)
+
+	AG:SetScript("OnPlay", function (self, ...)
+		self.initUpdate = false
+
+		local scrollTexture = self:GetParent()
+		if scrollTexture.degrees >= 360 then
+			scrollTexture.degrees = scrollTexture.degrees - 360 + (self.anim:GetDegrees())
+		elseif scrollTexture.degrees <= -360 then
+			scrollTexture.degrees = 0 + (self.anim:GetDegrees())
+		else
+			scrollTexture.degrees = scrollTexture.degrees + (self.anim:GetDegrees())
+		end
+	end)
+
+	return scrollTexture
+end
+
+local function CF_UpdatePowerBar(self, unit, cur, max)
+	local AG = self:GetParent().ag
+	local step = 180 / max
+
+	if AG.oldMax ~= max then 
+		if AG:IsPlaying() then AG:Stop() end
+
+		AG.initUpdate = true 
+		AG.oldCur = 0
+
+		self.actualBar:SetVertexColor(self:GetStatusBarColor())
+		self.actualBar:SetRotation(math.rad(AG.initAngle))
+		self.actualBar.degrees = AG.initAngle
+	end
+
+	AG.oldMax = max
+
+	local direction
+	if AG.oldCur > cur then -- ACW
+		direction = AG.ACW
+	elseif AG.oldCur <= cur then -- CW
+		direction = AG.CW
+	end
+
+	if not AG:IsPlaying() and (AG.anim:IsDone() or AG.initUpdate) then 
+		local steps_to_do = math.abs(cur - AG.oldCur)
+
+		if steps_to_do ~= 0 then
+			AG.newCur = cur
+
+			AG.anim:SetDuration(0.175 + 0.475 * math.max(steps_to_do / max, 10 / GetFramerate()))
+			AG.anim:SetDegrees(step * direction * steps_to_do)
+
+			AG:Play()
+			AG:Finish()
+		end
+	end
+
+	ns.UpdatePower(self, unit, cur, max)
+end
+ 
 local function CreateClassPowerBar(self, max, cpType)
 	local bar = CreateFrame("Frame", "bar"..cpType, self, "oUF_LSClassPowerFrameTemplate")
 	bar.__cpower = cpType
@@ -505,8 +609,8 @@ local function CreateUnitFrameStyle(self, unit)
 		self.frameType = "orb"
 		width, height = 160, 160
 		sbOrientation = "VERTICAL"
-		hpTexture = "Interface\\AddOns\\oUF_LS\\media\\frame_orb_filling"
-		ppTexture = "Interface\\AddOns\\oUF_LS\\media\\frame_orb_power"
+		hpTexture = "Interface\\AddOns\\oUF_LS\\media\\frame_orb_health_filling"
+		ppTexture = "Interface\\AddOns\\oUF_LS\\media\\frame_orb_power_filling"
 		hpTextTemplate = "oUF_LSUnitFrame18Text"
 		ppTextTemplate = "oUF_LSUnitFrame14Text"
 	elseif unit == "pet" then
@@ -563,6 +667,11 @@ local function CreateUnitFrameStyle(self, unit)
 		self.gloss:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_filling_gloss")
 		self.gloss:SetAllPoints(self.cover)
 
+		self.gradient = self.cover:CreateTexture(nil, "ARTWORK", nil, 0)
+		self.gradient:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_gradient")
+		self.gradient:SetBlendMode("MOD")
+		self.gradient:SetPoint("CENTER")
+
 		self.chainTexture = self.cover:CreateTexture("$parentChainTexture", "BACKGROUND", nil, 2)
 		self.chainTexture:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_chain_left")
 		self.chainTexture:SetSize(128, 64)
@@ -579,6 +688,10 @@ local function CreateUnitFrameStyle(self, unit)
 	if unit == "pet" then
 		self.fg:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_pet")
 	end
+
+	self.bg = self:CreateTexture("$parentBackground", "BACKGROUND", nil, 0)
+	self.bg:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_"..self.frameType.."_bg")
+	self.bg:SetPoint("CENTER")
 
 	if unit == "player" then
 		self.FloatingCombatFeedback = CreateFrame("Frame", "$parentFeedbackFrame", self)
@@ -623,7 +736,7 @@ local function CreateUnitFrameStyle(self, unit)
 
 	self.Health = CreateFrame("StatusBar", "$parentHealth", self)
 	self.Health:SetFrameStrata("LOW")
-	self.Health:SetFrameLevel(2)
+	self.Health:SetFrameLevel(3)
 	self.Health:SetOrientation(sbOrientation)
 	self.Health:SetStatusBarTexture(hpTexture)
 	self.Health:SetStatusBarColor(1.0, 1.0, 1.0)
@@ -663,10 +776,10 @@ local function CreateUnitFrameStyle(self, unit)
 	end
 	tinsert(self.mouseovers, self.Health)
 	
-	self.Health.bg = self.Health:CreateTexture(nil, "BACKGROUND", nil, 0)
-	self.Health.bg:SetTexture(hpTexture)
-	self.Health.bg:SetAllPoints(self.Health)
-	self.Health.bg.multiplier = 0.25
+	-- self.Health.bg = self.Health:CreateTexture(nil, "BACKGROUND", nil, 0)
+	-- self.Health.bg:SetTexture(hpTexture)
+	-- self.Health.bg:SetAllPoints(self.Health)
+	-- self.Health.bg.multiplier = 0.25
 
 	if unit == "player" then
 		self.Health.lowHP = self.cover:CreateTexture(nil, "ARTWORK", nil, 2)
@@ -678,28 +791,29 @@ local function CreateUnitFrameStyle(self, unit)
 		ns.CreateGlowAnimation(self.Health.lowHP, 1)
 	end
 
-	if unit ~= "focustarget" and unit ~= "targettarget" then
+	if unit ~= "focustarget" and unit ~= "targettarget"  then
 		self.Power = CreateFrame("StatusBar", "$parentPower", self)
 		self.Power:SetFrameStrata("LOW")
-		self.Power:SetFrameLevel(3)
-		self.Power:SetOrientation(sbOrientation)
-		self.Power:SetStatusBarTexture(ppTexture)
+		self.Power:SetFrameLevel(2)
 		if unit == "player" then
-			self.Power:SetSize(62, 130)
-			self.Power:SetPoint("CENTER", 35, 0)
-		elseif unit == "pet" then
-			self.Power:SetSize(51, 102)
-			self.Power:SetPoint("CENTER", 5, 0)
+			self.Power.actualBar = CF_CreatePowerBar(self, ppTexture, "RIGHT")
 		else
-			self.Power:SetPoint("TOP", 0, -30)
-			self.Power:SetPoint("LEFT", 15, 0)
-			self.Power:SetPoint("RIGHT", -15, 0)
-			self.Power:SetPoint("BOTTOM", 0, 8)
+			self.Power:SetOrientation(sbOrientation)
+			self.Power:SetStatusBarTexture(ppTexture)
+			if unit == "pet" then
+				self.Power:SetSize(51, 102)
+				self.Power:SetPoint("CENTER", 5, 0)
+			else
+				self.Power:SetPoint("TOP", 0, -30)
+				self.Power:SetPoint("LEFT", 15, 0)
+				self.Power:SetPoint("RIGHT", -15, 0)
+				self.Power:SetPoint("BOTTOM", 0, 8)
+			end
 		end
 		
-		self.Power.PostUpdate = ns.UpdatePower
-		self.Power.Smooth = true
-		self.Power.colorPower = true --MOVE TO CONFIG
+		self.Power.PostUpdate = unit == "player" and CF_UpdatePowerBar or ns.UpdatePower
+		self.Power.Smooth = unit ~= "player"
+		self.Power.colorPower = true
 		self.Power.colorDisconnected = true
 		self.Power.frequentUpdates = true
 
@@ -715,10 +829,15 @@ local function CreateUnitFrameStyle(self, unit)
 		end
 		tinsert(self.mouseovers, self.Power)
 		
-		self.Power.bg = self.Power:CreateTexture(nil, "BACKGROUND", nil, 0)
-		self.Power.bg:SetTexture(ppTexture)
-		self.Power.bg:SetAllPoints(self.Power)
-		self.Power.bg.multiplier = 0.25
+		-- self.Power.bg = self.Power:CreateTexture(nil, "BACKGROUND", nil, 0)
+		-- self.Power.bg:SetTexture(ppTexture)
+		-- if unit ~= "player" then
+		-- 	self.Power.bg:SetAllPoints(self.Power)
+		-- else
+		-- 	self.Power.bg:SetSize(140, 140)
+		-- 	self.Power.bg:SetPoint("CENTER", self, "CENTER", 0, 0)
+		-- end
+		-- self.Power.bg.multiplier = 0.25
 	else
 		ns.UnitFrameReskin(self, "sol")
 	end
