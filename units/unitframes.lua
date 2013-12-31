@@ -17,8 +17,9 @@ local curInUse = {
 	["NONE"] = {visible = false, slots = 0},
 }
 
-local classIconSpecSpell = {
-	["PRIEST"] = {RequireSpec = SPEC_PRIEST_SHADOW},
+local classIconSpell = {
+	["PALADIN"] = {RequireSpell = 85673},
+	["PRIEST"] = {RequireSpell = 95740},
 	["WARLOCK"] = {RequireSpell = WARLOCK_SOULBURN},
 }
 
@@ -127,20 +128,21 @@ local function CF_CreatePowerBar(self, texture, position)
 
 	scrollFrame:SetScrollChild(scrollChild)
 
-	local scrollTexture = scrollChild:CreateTexture("$parentActualPowerBar", "BACKGROUND", nil, -6)
+	local scrollTexture = scrollChild:CreateTexture(nil, "BACKGROUND", nil, -6)
 	scrollTexture:SetTexture(texture)
 	scrollTexture:SetSize(sqrt(2) * math.max(width, height), sqrt(2) * math.max(width, height))
 	scrollTexture:SetPoint("CENTER", width * w_multiplier, height * h_multiplier)
 
-	self.ag = scrollTexture:CreateAnimationGroup()
-	self.ag:SetIgnoreFramerateThrottle(true)
+	scrollTexture.ag = scrollTexture:CreateAnimationGroup()
+	scrollTexture.ag:SetIgnoreFramerateThrottle(true)
 
-	local AG = self.ag
+	local AG = scrollTexture.ag
 
 	AG.anim = AG:CreateAnimation("Rotation")
-	-- AG.anim:SetSmoothing("OUT")
 
-	AG.oldCur, AG.oldMax, AG.initAngle, AG.initUpdate, AG.CW, AG.ACW = 0, 0, initAngle, true, CW, ACW
+	AG.oldProgress, AG.oldCur, AG.oldMax, AG.initAngle, AG.initUpdate, AG.CW, AG.ACW = -1, 0, 0, initAngle, true, CW, ACW
+
+	AG:Finish()
 
 	scrollTexture:SetRotation(math.rad(AG.initAngle))
 	scrollTexture.degrees = AG.nit_angle
@@ -148,6 +150,8 @@ local function CF_CreatePowerBar(self, texture, position)
 	AG:SetScript("OnFinished", function (self, ...)
 		local scrollTexture = self:GetParent()
 		self.oldCur = self.newCur
+		-- print("finished")
+		-- if self.steps > 0 then self.steps = 0 self:Play() end
 		scrollTexture:SetRotation(math.rad(scrollTexture.degrees))
 	end)
 
@@ -155,10 +159,17 @@ local function CF_CreatePowerBar(self, texture, position)
 		local scrollTexture = self:GetParent()
 		scrollTexture:SetRotation(math.rad(scrollTexture.degrees))
 	end)
+	-- AG:SetScript("OnUpdate", function (self, ...)
+	-- 	print("ag.anim state", self.anim:IsPaused(), self.anim:IsStopped(), self.anim:IsPlaying(), self.anim:IsDone())
+	-- 	print("ag        state", self:IsPaused(), "stop", self:IsPlaying(), self:IsDone())
+	-- 	print("==============")
+	-- 	-- local scrollTexture = self:GetParent()
+	-- 	-- scrollTexture:SetRotation(math.rad(scrollTexture.degrees))
+	-- end)
 
 	AG:SetScript("OnPlay", function (self, ...)
 		self.initUpdate = false
-
+		-- print("i started playing")
 		local scrollTexture = self:GetParent()
 		if scrollTexture.degrees >= 360 then
 			scrollTexture.degrees = scrollTexture.degrees - 360 + (self.anim:GetDegrees())
@@ -173,7 +184,7 @@ local function CF_CreatePowerBar(self, texture, position)
 end
 
 local function CF_UpdatePowerBar(self, unit, cur, max)
-	local AG = self:GetParent().ag
+	local AG = self.actualBar.ag
 	local step = 180 / max
 
 	if AG.oldMax ~= max then 
@@ -196,13 +207,91 @@ local function CF_UpdatePowerBar(self, unit, cur, max)
 		direction = AG.CW
 	end
 
+	local steps_to_do = math.abs(cur - AG.oldCur)
+
+	-- local anim_progress = AG.anim:GetProgress()
+	-- AG.stuck = (AG.oldProgress == anim_progress and AG:IsPlaying()) and true or false
+	-- AG.oldProgress = anim_progress
+
+
+	if not AG:IsPlaying() and (AG.anim:IsDone() or AG.initUpdate) then 
+		if steps_to_do ~= 0 then
+			AG.newCur = cur
+
+			AG.anim:SetDuration(0.175 + 0.325 * steps_to_do / max)
+			-- AG.anim:SetDuration(0.175 + 0.325 * math.max(steps_to_do / max, 10 / GetFramerate()))
+			AG.anim:SetDegrees(step * direction * steps_to_do)
+
+			AG:Play()
+		end
+	end
+
+	-- if AG.stuck then
+	-- print("STUCK",cur, AG.oldCur, max, steps_to_do, AG.stuck, anim_progress, AG:IsPlaying(), AG.anim:IsDone())
+		-- AG.anim:SetDuration(0.175 + 0.325 * steps_to_do / max)
+		-- AG.anim:SetDegrees(step * direction * steps_to_do)
+		-- AG.steps = steps_to_do
+	-- end
+
+	ns.UpdatePower(self, unit, cur, max) -- custom PostUpdate
+end
+ 
+local function CreateClassPowerBar(self, max, cpType)
+	local bar = CreateFrame("Frame", "bar"..cpType, self, "oUF_LSClassPowerFrameTemplate")
+	bar.__cpower = cpType
+	
+	
+	bar.glow = {}
+	for i = 1, 5 do
+		bar[i] = bar:CreateTexture()
+		
+		bar.glow[i] = bar.cover:CreateTexture(nil, "ARTWORK", nil, 2)
+		bar.glow[i]:SetAlpha(0)
+		ns.CreateGlowAnimation(bar.glow[i], 1, 0.5)
+	end
+
+	return bar
+end
+
+local function UpdateClassPowerBar(self, cur, max, changed)
+
+	local AG = self.actualBar.ag
+	local step = 180 / max
+
+	if changed then 
+		if AG:IsPlaying() then AG:Stop() end
+
+		AG.initUpdate = true 
+		AG.oldCur = 0
+
+		self.actualBar:SetVertexColor(self[1]:GetVertexColor())
+		self.actualBar:SetRotation(math.rad(AG.initAngle))
+		self.actualBar.degrees = AG.initAngle
+
+		for i=1, max do
+			local left, right, top, bottom = unpack(M.textures.cpower["total"..max]["cpower"..i].glowcoord)
+			self.glow[i]:SetSize(abs(right - left) * 512, abs(bottom - top) * 256)
+			self.glow[i]:SetPoint(unpack(M.textures.cpower["total"..max]["cpower"..i].glowpoint))
+			self.glow[i]:SetTexture("Interface\\AddOns\\oUF_LS\\media\\cpower_glow")
+			self.glow[i]:SetTexCoord(left, right, top, bottom)
+			self.glow[i]:SetVertexColor(unpack(M.colors.classpower.GLOW))
+		end
+	end
+
+	local direction
+	if AG.oldCur > cur then -- ACW
+		direction = AG.ACW
+	elseif AG.oldCur <= cur then -- CW
+		direction = AG.CW
+	end
+
 	if not AG:IsPlaying() and (AG.anim:IsDone() or AG.initUpdate) then 
 		local steps_to_do = math.abs(cur - AG.oldCur)
 
 		if steps_to_do ~= 0 then
 			AG.newCur = cur
 
-			AG.anim:SetDuration(0.175 + 0.475 * math.max(steps_to_do / max, 10 / GetFramerate()))
+			AG.anim:SetDuration(0.175 + 0.325 * steps_to_do / max)
 			AG.anim:SetDegrees(step * direction * steps_to_do)
 
 			AG:Play()
@@ -210,51 +299,29 @@ local function CF_UpdatePowerBar(self, unit, cur, max)
 		end
 	end
 
-	ns.UpdatePower(self, unit, cur, max)
-end
- 
-local function CreateClassPowerBar(self, max, cpType)
-	local bar = CreateFrame("Frame", "bar"..cpType, self, "oUF_LSClassPowerFrameTemplate")
-	bar.__cpower = cpType
-
-	for i = 1, 5 do
-		bar[i] = bar:CreateTexture("icon"..i..cpType, "BACKGROUND", nil, 3)
-
-		bar[i].bg = bar:CreateTexture("icon"..i..cpType, "BACKGROUND", nil, 2)
-
-		bar[i].glow = bar.cover:CreateTexture(nil, "ARTWORK", nil, 2)
-		bar[i].glow:SetAlpha(0)
-		ns.CreateGlowAnimation(bar[i].glow, 1, 0.5)
-	end
-
-	return bar
-end
-
-local function UpdateClassPowerBar(self, cur, max, changed)
-	if changed then
-		local r, g, b = unpack(M.colors.classpower[self.__cpower])
-		for i = 1, max do 
-			self[i]:SetTexCoord(0, 1, 0, 1)
-			self[i]:SetSize(unpack(M.textures.cpower["total"..max]["cpower"..i].size))
-			self[i]:SetPoint(unpack(M.textures.cpower["total"..max]["cpower"..i].point))
-			self[i]:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_cpower_"..max.."\\"..i)
-			self[i]:SetVertexColor(r, g, b)
+	-- if changed then
+		-- local r, g, b = unpack(M.colors.classpower[self.__cpower])
+		-- for i = 1, max do 
+		-- 	self[i]:SetTexCoord(0, 1, 0, 1)
+		-- 	self[i]:SetSize(unpack(M.textures.cpower["total"..max]["cpower"..i].size))
+		-- 	self[i]:SetPoint(unpack(M.textures.cpower["total"..max]["cpower"..i].point))
+		-- 	self[i]:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_cpower_"..max.."\\"..i)
+		-- 	self[i]:SetVertexColor(r, g, b)
 			
-			self[i].bg:SetAllPoints(self[i])
-			self[i].bg:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_cpower_"..max.."\\"..i)
-			self[i].bg:SetVertexColor(r * 0.25, g * 0.25, b * 0.25)
+		-- 	self[i].bg:SetAllPoints(self[i])
+		-- 	self[i].bg:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_cpower_"..max.."\\"..i)
+		-- 	self[i].bg:SetVertexColor(r * 0.25, g * 0.25, b * 0.25)
 
-			local left, right, top, bottom = unpack(M.textures.cpower["total"..max]["cpower"..i].glowcoord)
-			self[i].glow:SetSize(abs(right - left) * 512, abs(bottom - top) * 256)
-			self[i].glow:SetPoint(unpack(M.textures.cpower["total"..max]["cpower"..i].glowpoint))
-			self[i].glow:SetTexture("Interface\\AddOns\\oUF_LS\\media\\cpower_glow")
-			self[i].glow:SetTexCoord(left, right, top, bottom)
-			self[i].glow:SetVertexColor(unpack(M.colors.classpower.GLOW))
-		end
-	end
+		-- 	local left, right, top, bottom = unpack(M.textures.cpower["total"..max]["cpower"..i].glowcoord)
+		-- 	self[i].glow:SetSize(abs(right - left) * 512, abs(bottom - top) * 256)
+		-- 	self[i].glow:SetPoint(unpack(M.textures.cpower["total"..max]["cpower"..i].glowpoint))
+		-- 	self[i].glow:SetTexture("Interface\\AddOns\\oUF_LS\\media\\cpower_glow")
+		-- 	self[i].glow:SetTexCoord(left, right, top, bottom)
+		-- 	self[i].glow:SetVertexColor(unpack(M.colors.classpower.GLOW))
+		-- end
+	-- end
 	if UnitHasVehicleUI("player")
-		or (classIconSpecSpell[C.playerclass] and (classIconSpecSpell[C.playerclass].RequireSpec and classIconSpecSpell[C.playerclass].RequireSpec ~= GetSpecialization()))
-		or (classIconSpecSpell[C.playerclass] and (classIconSpecSpell[C.playerclass].RequireSpell and not IsPlayerSpell(classIconSpecSpell[C.playerclass].RequireSpell))) then
+		or (classIconSpell[C.playerclass] and (classIconSpell[C.playerclass].RequireSpell and not IsPlayerSpell(classIconSpell[C.playerclass].RequireSpell))) then
 		self:Hide()
 		FrameReskin(self:GetParent(), "NONE", true, 0, self.__cpower)
 	else
@@ -262,15 +329,73 @@ local function UpdateClassPowerBar(self, cur, max, changed)
 		FrameReskin(self:GetParent(), self.__cpower, true, max or 5)
 		if cur / (max or 5) == 1 then
 			for i = 1, max do
-				self[i].glow.animation:Play()
+				self.glow[i].animation:Play()
 			end
 		else
 			for i = 1, max do
-				self[i].glow.animation:Finish()
+				self.glow[i].animation:Finish()
 			end
 		end
 	end
 end
+ 
+-- local function CreateClassPowerBar(self, max, cpType)
+-- 	local bar = CreateFrame("Frame", "bar"..cpType, self, "oUF_LSClassPowerFrameTemplate")
+-- 	bar.__cpower = cpType
+
+-- 	for i = 1, 5 do
+-- 		bar[i] = bar:CreateTexture("icon"..i..cpType, "BACKGROUND", nil, 3)
+
+-- 		bar[i].bg = bar:CreateTexture("icon"..i..cpType, "BACKGROUND", nil, 2)
+
+-- 		bar[i].glow = bar.cover:CreateTexture(nil, "ARTWORK", nil, 2)
+-- 		bar[i].glow:SetAlpha(0)
+-- 		ns.CreateGlowAnimation(bar[i].glow, 1, 0.5)
+-- 	end
+
+-- 	return bar
+-- end
+
+-- local function UpdateClassPowerBar(self, cur, max, changed)
+-- 	if changed then
+-- 		local r, g, b = unpack(M.colors.classpower[self.__cpower])
+-- 		for i = 1, max do 
+-- 			self[i]:SetTexCoord(0, 1, 0, 1)
+-- 			self[i]:SetSize(unpack(M.textures.cpower["total"..max]["cpower"..i].size))
+-- 			self[i]:SetPoint(unpack(M.textures.cpower["total"..max]["cpower"..i].point))
+-- 			self[i]:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_cpower_"..max.."\\"..i)
+-- 			self[i]:SetVertexColor(r, g, b)
+			
+-- 			self[i].bg:SetAllPoints(self[i])
+-- 			self[i].bg:SetTexture("Interface\\AddOns\\oUF_LS\\media\\frame_orb_cpower_"..max.."\\"..i)
+-- 			self[i].bg:SetVertexColor(r * 0.25, g * 0.25, b * 0.25)
+
+-- 			local left, right, top, bottom = unpack(M.textures.cpower["total"..max]["cpower"..i].glowcoord)
+-- 			self[i].glow:SetSize(abs(right - left) * 512, abs(bottom - top) * 256)
+-- 			self[i].glow:SetPoint(unpack(M.textures.cpower["total"..max]["cpower"..i].glowpoint))
+-- 			self[i].glow:SetTexture("Interface\\AddOns\\oUF_LS\\media\\cpower_glow")
+-- 			self[i].glow:SetTexCoord(left, right, top, bottom)
+-- 			self[i].glow:SetVertexColor(unpack(M.colors.classpower.GLOW))
+-- 		end
+-- 	end
+-- 	if UnitHasVehicleUI("player")
+-- 		or (classIconSpell[C.playerclass] and (classIconSpell[C.playerclass].RequireSpell and not IsPlayerSpell(classIconSpell[C.playerclass].RequireSpell))) then
+-- 		self:Hide()
+-- 		FrameReskin(self:GetParent(), "NONE", true, 0, self.__cpower)
+-- 	else
+-- 		self:Show()
+-- 		FrameReskin(self:GetParent(), self.__cpower, true, max or 5)
+-- 		if cur / (max or 5) == 1 then
+-- 			for i = 1, max do
+-- 				self[i].glow.animation:Play()
+-- 			end
+-- 		else
+-- 			for i = 1, max do
+-- 				self[i].glow.animation:Finish()
+-- 			end
+-- 		end
+-- 	end
+-- end
 
 local function CreateDemonicFury(self)
 	local bar = CreateFrame("StatusBar", "barFURY", self, "oUF_LSClassPowerFrameTemplate")
@@ -697,8 +822,6 @@ local function CreateUnitFrameStyle(self, unit)
 		self.FloatingCombatFeedback = CreateFrame("Frame", "$parentFeedbackFrame", self)
 		self.FloatingCombatFeedback:SetFrameStrata("LOW")
 		self.FloatingCombatFeedback:SetFrameLevel(5)
-		self.FloatingCombatFeedback:SetSize(116, 116)
-		self.FloatingCombatFeedback:SetPoint("CENTER", 0, 78)
 		for i = 1, 4 do
 			self.FloatingCombatFeedback[i] = self.FloatingCombatFeedback:CreateFontString("feeback"..i, "OVERLAY", "oUF_LSUnitFrame18Text")
 		end
@@ -1095,6 +1218,7 @@ local function CreateUnitFrameStyle(self, unit)
 
 		if C.playerclass == "MONK" then
 			self.ClassIcons = CreateClassPowerBar(self, 5, "CHI")
+			self.ClassIcons.actualBar = CF_CreatePowerBar(self, ppTexture, "LEFT")
 			self.ClassIcons.PostUpdate = UpdateClassPowerBar
 		end
 
@@ -1110,11 +1234,13 @@ local function CreateUnitFrameStyle(self, unit)
 
 		if C.playerclass == "PALADIN" then
 			self.ClassIcons = CreateClassPowerBar(self, 5, "HOLYPOWER")
+			self.ClassIcons.actualBar = CF_CreatePowerBar(self, ppTexture, "LEFT")
 			self.ClassIcons.PostUpdate = UpdateClassPowerBar
 		end
 
 		if C.playerclass == "WARLOCK" then
 				self.ClassIcons = CreateClassPowerBar(self, 4, "SOULSHARD")
+				self.ClassIcons.actualBar = CF_CreatePowerBar(self, ppTexture, "LEFT")
 				self.ClassIcons.PostUpdate = UpdateClassPowerBar
 
 				self.BurningEmbers = CreateBurningEmbers(self)
@@ -1128,6 +1254,7 @@ local function CreateUnitFrameStyle(self, unit)
 
 		if C.playerclass == "PRIEST" then
 			self.ClassIcons = CreateClassPowerBar(self, 5, "SHADOWORB")
+			self.ClassIcons.actualBar = CF_CreatePowerBar(self, ppTexture, "LEFT")
 			self.ClassIcons.PostUpdate = UpdateClassPowerBar
 		end
 		
